@@ -43,6 +43,8 @@ class CustomerAgent(Agent):
         book_agent = random.choice(book_agents)
         book = book_agent.book
         qty = int(_first(book.availableQuantity, 0) or 0)
+        cust_name = _first(self.customer.hasName, "?")
+        title = _first(book.hasTitle, book.name)
 
         if qty > 0:
             # Decrement book stock
@@ -56,23 +58,44 @@ class CustomerAgent(Agent):
             # Create an order linking customer and book
             create_order(self.customer, book, 1)
 
-            print(
-                f"[Step {self.model.current_step}] {_first(self.customer.hasName, '?')} "
-                f"purchased '{_first(book.hasTitle, book.name)}' -> qty {qty-1}"
-            )
-
             # Determine threshold from book or model
             thresh = int(_first(book.restockThreshold, self.model.restock_threshold) or self.model.restock_threshold)
+
+            # UI event: purchase
+            self.model.ui_events.append({
+                "step": self.model.current_step,
+                "type": "purchase",
+                "customer": cust_name,
+                "book": title,
+                "qty_before": qty,
+                "qty_after": qty - 1,
+                "threshold": thresh,
+                "below_threshold": (qty - 1) < thresh,
+            })
+
+            # Publish restock request if below threshold
             if qty - 1 < thresh:
                 self.model.message_bus.publish({
                     "type": "restock_request",
                     "book": book
                 })
+                # UI event: low-stock trigger
+                self.model.ui_events.append({
+                    "step": self.model.current_step,
+                    "type": "low_stock_trigger",
+                    "book": title,
+                    "qty": qty - 1,
+                    "threshold": thresh,
+                })
         else:
-            print(
-                f"[Step {self.model.current_step}] {_first(self.customer.hasName, '?')} tried to purchase "
-                f"'{_first(book.hasTitle, book.name)}' but it's out of stock"
-            )
+            # UI event: out-of-stock attempt
+            self.model.ui_events.append({
+                "step": self.model.current_step,
+                "type": "out_of_stock",
+                "customer": cust_name,
+                "book": title,
+                "qty": qty,
+            })
 
 
 class EmployeeAgent(Agent):
@@ -96,7 +119,21 @@ class EmployeeAgent(Agent):
                 inv_qty = int(_first(inv.currentQuantity, 0) or 0)
                 inv.currentQuantity = inv_qty + self.restock_amount
 
+            emp_name = _first(self.employee.hasName, "?")
+            title = _first(book.hasTitle, book.name)
+
+            # UI event: restock
+            self.model.ui_events.append({
+                "step": self.model.current_step,
+                "type": "restock",
+                "employee": emp_name,
+                "book": title,
+                "added": self.restock_amount,
+                "qty_before": qty,
+                "qty_after": new_qty,
+            })
+
             print(
-                f"[Step {self.model.current_step}] {_first(self.employee.hasName, '?')} restocked "
-                f"'{_first(book.hasTitle, book.name)}' -> qty {new_qty}"
+                f"[Step {self.model.current_step}] {emp_name} restocked "
+                f"'{title}' -> qty {new_qty}"
             )

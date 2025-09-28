@@ -41,18 +41,21 @@ def _resolve_random_activation():
 
 _RandomActivation = _resolve_random_activation()
 
-from .ontology import onto, create_sample_data, list_inventory, _first, run_reasoner_safe, list_purchases
+from .ontology import onto, create_sample_data, list_inventory, _first, run_reasoner_safe, list_purchases, LOW_STOCK_RULE_ENABLED
 from .agents import BookAgent, CustomerAgent, EmployeeAgent
 from .message_bus import MessageBus
 
 
 class LibraryModel(Model):
-    def __init__(self, restock_threshold=1):
+    def __init__(self, restock_threshold=1, restock_amount=3):
         super().__init__()
         self.schedule = _RandomActivation(self)
         self.current_step = 0
         self.restock_threshold = restock_threshold
+        self.restock_amount = restock_amount
         self.message_bus = MessageBus()
+        # UI event sink for Streamlit: agents append dict events here
+        self.ui_events: list[dict] = []
 
         create_sample_data()
 
@@ -67,7 +70,8 @@ class LibraryModel(Model):
         for c in onto.Customer.instances():
             self.schedule.add(CustomerAgent(uid, self, c)); uid += 1
         for e in onto.Employee.instances():
-            self.schedule.add(EmployeeAgent(uid, self, e)); uid += 1
+            # Pass configured restock amount
+            self.schedule.add(EmployeeAgent(uid, self, e, restock_amount=self.restock_amount)); uid += 1
 
     def step(self):
         self.schedule.step()
@@ -91,9 +95,21 @@ class LibraryModel(Model):
         print("\nPurchase summary:")
         list_purchases()
 
-        # SWRL low-stock classification (if reasoner available)
+        # SWRL low-stock classification (if reasoner available) with Python fallback
+        titles_swrl = []
         try:
-            lows = [ _first(b.hasTitle, b.name) for b in onto.LowStockBook.instances() ]
-            print(f"Low-stock classification (SWRL): {lows}")
+            titles_swrl = [ _first(b.hasTitle, b.name) for b in onto.LowStockBook.instances() ]
         except Exception:
-            pass
+            titles_swrl = []
+
+        if titles_swrl:
+            print(f"Low-stock classification (SWRL): {titles_swrl}")
+        else:
+            # Fallback classification based on numeric comparison
+            fallback = []
+            for b in onto.Book.instances():
+                q = int(_first(b.availableQuantity, 0) or 0)
+                t = int(_first(b.restockThreshold, self.restock_threshold) or self.restock_threshold)
+                if q < t:
+                    fallback.append(_first(b.hasTitle, b.name))
+            print(f"Low-stock classification (fallback): {fallback}")

@@ -2,8 +2,18 @@ from owlready2 import *
 from datetime import datetime
 import uuid
 
+# Ensure SWRL namespaces exist in the default world for rule parsing
+try:
+    default_world._namespaces["swrl"] = default_world.get_namespace("http://www.w3.org/2003/11/swrl#")
+    default_world._namespaces["swrlb"] = default_world.get_namespace("http://www.w3.org/2003/11/swrlb#")
+except Exception:
+    pass
+
 ONTO_URI = "http://example.org/bookstore.owl"
 onto = get_ontology(ONTO_URI)
+
+# Flag to indicate if low-stock SWRL rule was registered successfully
+LOW_STOCK_RULE_ENABLED = False
 
 with onto:
     # Core classes
@@ -54,16 +64,18 @@ with onto:
         rule_low_stock.set_as_rule(
             "Book(?b), availableQuantity(?b, ?q), restockThreshold(?b, ?t), swrlb:lessThan(?q, ?t) -> LowStockBook(?b)"
         )
+        LOW_STOCK_RULE_ENABLED = True
     except Exception as e:
         print("Warning: SWRL low-stock rule not registered:", e)
 
 
 def _first(val, default=None):
-    try:
-        # Owlready2 properties are list-like; handle both list and scalar
+    if val is None:
+        return default
+    # Only index list/tuple values; treat str as scalar
+    if isinstance(val, (list, tuple)):
         return val[0] if val else default
-    except Exception:
-        return val if val is not None else default
+    return val
 
 
 def get_inventory_for_book(book: onto.Book):
@@ -156,3 +168,12 @@ def list_purchases():
         name = _first(c.hasName, c.name)
         items = [ _first(b.hasTitle, b.name) for b in (c.purchases or []) ]
         print(f"Customer {name} purchases: {items}")
+
+
+def reset_ontology():
+    """Destroy all instances to reset the ontology for a fresh run."""
+    with onto:
+        classes = [Book, Inventory, Order, Customer, Employee, LowStockBook]
+        for cls in classes:
+            for inst in list(cls.instances()):
+                destroy_entity(inst)
