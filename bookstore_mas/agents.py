@@ -8,7 +8,7 @@ class Agent:
         pass
 
 import random
-from .ontology import _first
+from .ontology import _first, get_inventory_for_book, create_order
 
 class BookAgent(Agent):
     def __init__(self, unique_id, model, book_onto):
@@ -41,24 +41,37 @@ class CustomerAgent(Agent):
             return
 
         book_agent = random.choice(book_agents)
-        qty = int(_first(book_agent.book.availableQuantity, 0) or 0)
+        book = book_agent.book
+        qty = int(_first(book.availableQuantity, 0) or 0)
 
         if qty > 0:
-            # Assign scalar to Functional DataProperty
-            book_agent.book.availableQuantity = qty - 1
+            # Decrement book stock
+            book.availableQuantity = qty - 1
+            # Decrement inventory stock if present
+            inv = get_inventory_for_book(book)
+            if inv is not None:
+                inv_qty = int(_first(inv.currentQuantity, 0) or 0)
+                inv.currentQuantity = max(inv_qty - 1, 0)
+
+            # Create an order linking customer and book
+            create_order(self.customer, book, 1)
+
             print(
                 f"[Step {self.model.current_step}] {_first(self.customer.hasName, '?')} "
-                f"borrowed '{_first(book_agent.book.hasTitle, book_agent.book.name)}' -> qty {qty-1}"
+                f"purchased '{_first(book.hasTitle, book.name)}' -> qty {qty-1}"
             )
-            if qty - 1 < self.model.restock_threshold:
+
+            # Determine threshold from book or model
+            thresh = int(_first(book.restockThreshold, self.model.restock_threshold) or self.model.restock_threshold)
+            if qty - 1 < thresh:
                 self.model.message_bus.publish({
                     "type": "restock_request",
-                    "book": book_agent.book
+                    "book": book
                 })
         else:
             print(
-                f"[Step {self.model.current_step}] {_first(self.customer.hasName, '?')} tried to borrow "
-                f"'{_first(book_agent.book.hasTitle, book_agent.book.name)}' but it's out of stock"
+                f"[Step {self.model.current_step}] {_first(self.customer.hasName, '?')} tried to purchase "
+                f"'{_first(book.hasTitle, book.name)}' but it's out of stock"
             )
 
 
@@ -74,8 +87,15 @@ class EmployeeAgent(Agent):
             book = msg["book"]
             qty = int(_first(book.availableQuantity, 0) or 0)
             new_qty = qty + self.restock_amount
-            # Assign scalar to Functional DataProperty
+            # Update book stock
             book.availableQuantity = new_qty
+
+            # Update inventory stock if present
+            inv = get_inventory_for_book(book)
+            if inv is not None:
+                inv_qty = int(_first(inv.currentQuantity, 0) or 0)
+                inv.currentQuantity = inv_qty + self.restock_amount
+
             print(
                 f"[Step {self.model.current_step}] {_first(self.employee.hasName, '?')} restocked "
                 f"'{_first(book.hasTitle, book.name)}' -> qty {new_qty}"
