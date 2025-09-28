@@ -1,170 +1,96 @@
-# Bookstore MAS (Multi-Agent System)
+# Bookstore MAS (Multi‑Agent System)
 
-A tiny agent-based simulation of a bookstore using an ontology (Owlready2) and a Mesa-compatible scheduler. Customers randomly buy books; employees restock when inventory drops below a threshold. It runs with multiple Mesa versions and falls back to a small built-in scheduler if Mesa’s scheduler module isn’t available.
+A small ontology‑driven, agent‑based bookstore simulation. Customers buy books; employees restock when quantities drop below a threshold. You can run it headless (CLI) or interact with a visual dashboard (Streamlit) that shows thresholds, colors, and a live event timeline.
 
-- Language: Python 3.10+
-- Dependencies: Mesa (2.x/3.x), Owlready2
-- Entry point: `bookstore_mas/run.py`
+- Python: 3.10+
+- Core libs: Owlready2 (ontology), Mesa (agent scheduler; dynamic import with fallback)
+- Entrypoints: `bookstore_mas/run.py` (CLI) and `streamlit_app.py` (dashboard)
 
-## Project layout
-- `bookstore_mas/ontology.py` — Ontology (Book, Customer, Employee, Order, Inventory, LowStockBook), sample data, helpers (`_first`, `create_order`, `get_inventory_for_book`, `run_reasoner_safe`, `list_inventory`, `list_purchases`). Includes SWRL rules.
-- `bookstore_mas/agents.py` — Agent classes: `BookAgent`, `CustomerAgent`, `EmployeeAgent`, and a minimal `Agent` base. Customers create orders; employees restock books and inventory.
-- `bookstore_mas/message_bus.py` — Simple in-memory message bus for restock requests.
-- `bookstore_mas/model.py` — `LibraryModel` wires everything together, resolves the scheduler across Mesa versions, ensures per-book restock thresholds, runs the reasoner (optional), prints summaries.
-- `bookstore_mas/run.py` — Command-line runner.
-- `pyproject.toml` — Declares dependencies.
-
-## Quickstart (Windows, with uv)
-Prerequisites:
-- Python 3.10+
-- uv installed (https://docs.astral.sh/uv/)
-
+## Quickstart (Windows, uv)
 From the project root:
 
 ```bat
 uv sync
+```
+
+Run the CLI simulation:
+```bat
 uv run python -m bookstore_mas.run --steps 6
 ```
 
-You should see an initial inventory, step-by-step purchases/restocks, a final inventory, a purchase summary, and (if a reasoner is available) a low-stock classification.
+Launch the visual dashboard (recommended):
+```bat
+uv run streamlit run streamlit_app.py
+```
+Open the URL shown (usually http://localhost:8501).
 
-## How it works
-- Ontology (Owlready2)
-  - Classes: `Book`, `Customer`, `Employee`, `Order`, `Inventory`, `LowStockBook` (SWRL-inferred).
-  - Data properties (Functional): `hasName`, `hasTitle`, `hasAuthor`, `hasGenre`, `availableQuantity`, `currentQuantity` (Inventory), `hasPrice`, `restockThreshold` (Book), `hasQuantity`, `hasUnitPrice`, `orderTime` (Order).
-  - Object properties: `borrows`, `worksAt`, `purchases` (Customer→Book), `hasBuyer` (Order→Customer), `hasItem` (Order→Book), `tracksBook` (Inventory→Book).
-  - `create_sample_data()` seeds books (title/author/genre/price/quantity/threshold), inventory per book, customers, and an employee.
-  - `_first(val, default)` safely reads values as list or scalar.
+## What you’ll see in the dashboard
+- Inventory table
+  - Columns: Title, Qty, Threshold, State, Price
+  - State colors show threshold behavior at a glance:
+    - OK: quantity > threshold (green)
+    - At threshold: quantity == threshold (amber)
+    - Low: quantity < threshold (red)
+- Current stock vs threshold (bar chart)
+  - Bars = current quantity, colored by State
+  - Orange triangles = each title’s threshold
+- Inventory over steps (time series)
+  - Blue line = quantity over time
+  - Orange dashed line = threshold over time
+- Purchases over time (bar chart)
+  - Purchases per step, colored by book
+- Event timeline (live)
+  - Each step shows “what just happened,” with colored badges:
+    - Purchase (blue): who bought what; qty_before → qty_after; active threshold
+    - Low stock trigger (orange): qty_after < threshold ⇒ restock requested
+    - Restock (green): employee restocked; how much; new quantity
+    - Out of stock (red): a customer tried to buy but quantity was 0
 
-- SWRL rules (in `ontology.py`)
-  - Purchases inference:
-    ```python
-    rule_purchases.set_as_rule("Order(?o), hasBuyer(?o, ?c), hasItem(?o, ?b) -> purchases(?c, ?b)")
-    ```
-  - Low-stock classification:
-    ```python
-    rule_low_stock.set_as_rule(
-        "Book(?b), availableQuantity(?b, ?q), restockThreshold(?b, ?t), swrlb:lessThan(?q, ?t) -> LowStockBook(?b)"
-    )
-    ```
-  - `run_reasoner_safe()` tries Pellet or the default reasoner and skips gracefully if unavailable.
+Tip: use “Step once” or “Run N steps” to evolve the sim and see charts/timeline update.
 
-- Agents
-  - Minimal local `Agent` base to avoid mesa.Agent init issues.
-  - `CustomerAgent.step()`:
-    - Picks a random `BookAgent`.
-    - Decrements `Book.availableQuantity` and matching `Inventory.currentQuantity`.
-    - Creates an `Order` via `create_order(customer, book, qty=1)`.
-    - If below the threshold (book-specific `restockThreshold` or model default), publishes a `restock_request`.
-  - `EmployeeAgent.step()`:
-    - Consumes `restock_request`.
-    - Increases `Book.availableQuantity` and `Inventory.currentQuantity` by `restock_amount`.
+## Data entry and controls
+- Setup panel (top of page)
+  - Add books: Title (required), Author, Genre, Price, Quantity, Restock threshold
+  - Add customers / employees by name
+  - Delete selected entries
+- Sidebar controls
+  - Restock threshold and Restock amount (applied on reset)
+  - Reset simulation (keep data): rebuilds the model using your current data
+  - Load sample (reset all): clears and reloads the sample ontology
+  - Step once / Run N steps; optional “Run reasoner (SWRL)”
 
-- Message Bus
-  - `publish(message: dict)` and `get_messages(msg_type)` support decoupled agent communication.
+## Save / load your data
+- Save
+  - “Download JSON snapshot” includes settings, books + inventory, customers, employees, and orders
+- Load
+  - Choose a JSON snapshot; load by Replace (wipe and load) or Append (merge)
+- Exports
+  - Inventory CSV and Orders CSV buttons under each table
 
-- Model and Scheduler
-  - `LibraryModel` tracks `current_step`, `restock_threshold`, `message_bus`, and a scheduler.
-  - Sets `restockThreshold` per book if missing.
-  - Uses Mesa’s `RandomActivation` if available; otherwise, a tiny fallback with `add()`, `agents`, and random `step()`.
-  - After running steps: prints final inventory, runs the reasoner (optional), prints a purchase summary, and lists SWRL-inferred `LowStockBook` instances if available.
-
-- Runner
-  - `bookstore_mas/run.py` parses `--steps` and runs the model.
-
-## Assignment tasks mapping
-1) Setup and Imports — Done
-- Dependencies in `pyproject.toml` (Mesa and Owlready2). Scheduler resolution adapts to Mesa versions.
-
-2) Ontology Definition — Done (extendable)
-- Implemented: `Book`, `Customer`, `Employee`, `Order`, `Inventory`, and properties (`hasAuthor`, `hasGenre`, `availableQuantity`, `currentQuantity`, `hasPrice`, `purchases`, `worksAt`, `hasBuyer`, `hasItem`, `hasQuantity`, `hasUnitPrice`, `orderTime`, `restockThreshold`, `tracksBook`).
-
-3) Agent-Based Simulation — Done
-- Customers browse randomly and purchase if available.
-- Employees restock low inventory.
-- Book agents expose ontology-backed price/stock/genre.
-
-4) SWRL Rules — Done
-- Purchases inference and low-stock classification rules included; reasoner invoked at end if available.
-
-5) Message Bus — Done
-- Agents publish/consume messages for restocking.
-
-6) MAS Model and Agents — Done
-- Full Mesa-compatible model with agents and scheduler.
-
-7) Run Simulation — Done
-- Use `--steps` to control iterations.
-
-8) Inspection and Summary — Done
-- Final inventory, purchase summary, and (if reasoner) low-stock classification.
-
-## Important code lines explained
-- Dynamic scheduler resolution (`bookstore_mas/model.py`):
-  ```python
-  from importlib import import_module
-  def _resolve_random_activation():
-      candidates = [
-          ("mesa.time", "RandomActivation"),
-          ("mesa.scheduler", "RandomActivation"),
-          ("mesa.timekeeping", "RandomActivation"),
-      ]
-      for mod_name, attr in candidates:
-          try:
-              mod = import_module(mod_name)
-              return getattr(mod, attr)
-          except Exception:
-              continue
-      # Fallback class if Mesa paths are unavailable
-  ```
-- Fallback scheduler (simplified):
-  ```python
-  class _RandomActivationFallback:
-      def __init__(self, model):
-          self._agents = []
-      @property
-      def agents(self):
-          return list(self._agents)
-      def add(self, agent):
-          self._agents.append(agent)
-      def step(self):
-          random.shuffle(self._agents)
-          for a in list(self._agents):
-              a.step()
-  ```
-- SWRL rules (`bookstore_mas/ontology.py`):
-  ```python
-  rule_purchases.set_as_rule("Order(?o), hasBuyer(?o, ?c), hasItem(?o, ?b) -> purchases(?c, ?b)")
-  rule_low_stock.set_as_rule(
-      "Book(?b), availableQuantity(?b, ?q), restockThreshold(?b, ?t), swrlb:lessThan(?q, ?t) -> LowStockBook(?b)"
-  )
-  ```
-- Order creation (`create_order`):
-  ```python
-  order = onto.Order(oid)
-  order.hasBuyer = customer
-  order.hasItem = book
-  order.hasQuantity = 1
-  order.hasUnitPrice = float(_first(book.hasPrice, 0) or 0)
-  order.orderTime = datetime.now()
-  customer.purchases.append(book)
-  ```
-- Inventory linkage and updates:
-  ```python
-  inv = get_inventory_for_book(book)
-  if inv is not None:
-      inv.currentQuantity = max(int(_first(inv.currentQuantity, 0) or 0) - 1, 0)
-  # In employee restock:
-  inv.currentQuantity = int(_first(inv.currentQuantity, 0) or 0) + self.restock_amount
-  ```
+## How the simulation works (brief)
+- Ontology (`bookstore_mas/ontology.py`)
+  - Classes: Book, Customer, Employee, Order, Inventory
+  - Data props: hasTitle/Author/Genre/Price, availableQuantity, restockThreshold, currentQuantity (Inventory), hasQuantity/hasUnitPrice/orderTime (Order)
+  - Object props: purchases (Customer→Book), hasBuyer (Order→Customer), hasItem (Order→Book), tracksBook (Inventory→Book)
+  - SWRL examples: purchases inference; low‑stock rule (guarded). Dashboard also uses a Python fallback for low‑stock detection.
+- Agents (`bookstore_mas/agents.py`)
+  - Customer: randomly selects a book, purchases if in stock, reduces quantity, emits low‑stock trigger when qty_after < threshold
+  - Employee: listens for restock requests and replenishes by restock_amount
+  - Both publish structured UI events so the timeline explains actions as they happen
+- Model (`bookstore_mas/model.py`)
+  - Dynamic scheduler import for Mesa (with a minimal fallback)
+  - Per‑book restockThreshold is honored; a model default applies when missing
 
 ## Troubleshooting
-- Mesa import errors: The project dynamically resolves the scheduler and falls back to a local implementation. If you want to require Mesa’s scheduler, pin Mesa ≥ 3.0 and use `from mesa.scheduler import RandomActivation`.
-- Reasoner not found: `run_reasoner_safe()` will skip if Pellet/Java isn’t available.
-- Owlready2 TypeError: Assign scalars (not lists) to Functional DataProperties.
-- `uv` not found: Install uv (e.g., `pipx install uv`) or use `pip install -e .`.
+- Reasoner not available: SWRL is optional; the app logs and continues with Python fallback for low‑stock.
+- Missing UI data: step the simulation to populate history lines and event timeline.
+- uv not found: install uv (e.g., via pipx), or use `pip install -e .` and run `python -m bookstore_mas.run` / `streamlit run streamlit_app.py`.
 
-## Further extensions
-- Add additional properties (e.g., discounts, genres hierarchies).
-- Capture detailed order history and export summaries.
-- Visualization: integrate Mesa’s visualization or dashboards.
+## Project layout
+- `bookstore_mas/ontology.py` — Ontology, sample data, helpers (incl. `_first`, `create_order`, `get_inventory_for_book`, `run_reasoner_safe`)
+- `bookstore_mas/agents.py` — Customer/Employee/Book agents (with UI events)
+- `bookstore_mas/message_bus.py` — Simple pub/sub for restock requests
+- `bookstore_mas/model.py` — LibraryModel (scheduler wiring, thresholds, summaries)
+- `bookstore_mas/run.py` — CLI runner
+- `streamlit_app.py` — Interactive dashboard (charts, colors, event timeline, data entry, save/load)
+- `pyproject.toml` — Dependencies
